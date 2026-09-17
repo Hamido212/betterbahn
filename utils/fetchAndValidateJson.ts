@@ -1,4 +1,5 @@
 import { type ZodType, prettifyError } from "zod/v4";
+import { fetchWithBahnFallback } from "./bahnApiFetch";
 
 export const fetchAndValidateJson = async <
 	T extends ZodType,
@@ -29,7 +30,7 @@ export const fetchAndValidateJson = async <
 		init.body = JSON.stringify(body);
 	}
 
-	const response = await fetch(url, init);
+	const response = await fetchWithBahnFallback(url, init);
 
 	if (!response.ok) {
 		const errorMessage =
