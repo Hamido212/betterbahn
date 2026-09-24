@@ -18,7 +18,7 @@ This is not an official repository or project of Deutsche Bahn AG. It is an inde
 - [Node.js](https://nodejs.org/en/)
 - [pnpm](https://pnpm.io/) (see below for installation)
 - [git](https://git-scm.com/)
-- [curl](https://curl.se/) (included with current Windows and macOS versions)
+- [curl](https://curl.se/) for environments where Deutsche Bahn blocks native Node requests (included with current Windows and macOS versions)
 
 ### To run the project locally
 

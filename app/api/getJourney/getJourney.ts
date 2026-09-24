@@ -1,5 +1,5 @@
 import { fetchAndValidateJson } from "@/utils/fetchAndValidateJson";
-import { requestWithBahnCurl } from "@/utils/bahnApiFetch";
+import { requestWithBahnFallback } from "@/utils/bahnApiFetch";
 import { parseHinfahrtReconWithAPI } from "@/utils/parseHinfahrtRecon";
 import { vbidSchema, vendoJourneySchema } from "@/utils/schemas";
 import { t } from "@/utils/trpc-init";
@@ -10,7 +10,7 @@ import { profile as dbProfile } from "db-vendo-client/p/db/index";
 import { prettifyError, z } from "zod/v4";
 
 export const dbClient = createClient(
-	{ ...(dbProfile as object), request: requestWithBahnCurl },
+	{ ...(dbProfile as object), request: requestWithBahnFallback },
 	"mail@lukasweihrauch.de"
 );
 

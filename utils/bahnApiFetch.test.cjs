@@ -5,10 +5,10 @@ const {
 	decompressResponseBody,
 	fetchWithBahnFallback,
 	parseResponseHeaders,
-	requestWithBahnCurl,
+	requestWithBahnFallback,
 } = require("./bahnApiFetch.ts");
 
-test("uses curl directly for Bahn API requests", async () => {
+test("retries blocked Bahn web API requests with curl", async () => {
 	let fetchCalls = 0;
 	let curlCalls = 0;
 	const response = await fetchWithBahnFallback(
@@ -29,17 +29,17 @@ test("uses curl directly for Bahn API requests", async () => {
 	);
 
 	assert.equal(response.status, 200);
-	assert.equal(fetchCalls, 0);
+	assert.equal(fetchCalls, 1);
 	assert.equal(curlCalls, 1);
 });
 
-test("uses curl directly for the current Bahn journey endpoint", async () => {
+test("retries blocked Bahn journey requests with curl", async () => {
 	let curlCalls = 0;
 	const response = await fetchWithBahnFallback(
 		"https://app.services-bahn.de/mob/angebote/fahrplan",
 		{},
 		{
-			fetch: () => Promise.reject(new Error("native fetch must not run")),
+			fetch: () => Promise.resolve(new Response(null, { status: 452 })),
 			curlFetch: () => {
 				curlCalls += 1;
 				return Promise.resolve(new Response(null, { status: 200 }));
@@ -51,13 +51,13 @@ test("uses curl directly for the current Bahn journey endpoint", async () => {
 	assert.equal(curlCalls, 1);
 });
 
-test("uses curl for the international Bahn web API", async () => {
+test("retries blocked international Bahn web API requests with curl", async () => {
 	let curlCalls = 0;
 	await fetchWithBahnFallback(
 		"https://int.bahn.de/web/api/angebote/verbindung/example",
 		{},
 		{
-			fetch: () => Promise.reject(new Error("native fetch must not run")),
+			fetch: () => Promise.resolve(new Response(null, { status: 452 })),
 			curlFetch: () => {
 				curlCalls += 1;
 				return Promise.resolve(new Response(null, { status: 200 }));
@@ -66,6 +66,43 @@ test("uses curl for the international Bahn web API", async () => {
 	);
 
 	assert.equal(curlCalls, 1);
+});
+
+test("keeps successful native Bahn responses without invoking curl", async () => {
+	let curlCalls = 0;
+	const nativeResponse = new Response('{"journeys":[]}', { status: 200 });
+	const response = await fetchWithBahnFallback(
+		"https://app.services-bahn.de/mob/angebote/fahrplan",
+		{},
+		{
+			fetch: () => Promise.resolve(nativeResponse),
+			curlFetch: () => {
+				curlCalls += 1;
+				return Promise.resolve(new Response(null, { status: 200 }));
+			},
+		}
+	);
+
+	assert.equal(response, nativeResponse);
+	assert.equal(curlCalls, 0);
+});
+
+test("does not retry unrelated Bahn API errors with curl", async () => {
+	let curlCalls = 0;
+	const response = await fetchWithBahnFallback(
+		"https://www.bahn.de/web/api/angebote/verbindung/example",
+		{},
+		{
+			fetch: () => Promise.resolve(new Response(null, { status: 404 })),
+			curlFetch: () => {
+				curlCalls += 1;
+				return Promise.resolve(new Response(null, { status: 200 }));
+			},
+		}
+	);
+
+	assert.equal(response.status, 404);
+	assert.equal(curlCalls, 0);
 });
 
 test("uses native fetch for requests to other hosts", async () => {
@@ -199,7 +236,7 @@ const createVendoContext = (transformRequest = (request) => request) => ({
 test("adapts db-vendo-client requests and returns the JSON response", async () => {
 	let capturedUrl;
 	let capturedInit;
-	const result = await requestWithBahnCurl(
+	const result = await requestWithBahnFallback(
 		createVendoContext(),
 		"betterbahn-test",
 		{
@@ -238,7 +275,7 @@ test("adapts db-vendo-client requests and returns the JSON response", async () =
 test("rejects unsupported Vendo query parameters before fetching", async () => {
 	let fetchCalls = 0;
 	await assert.rejects(
-		requestWithBahnCurl(
+		requestWithBahnFallback(
 			createVendoContext((request) => ({ ...request, query: { page: 1 } })),
 			"betterbahn-test",
 			{
@@ -261,7 +298,7 @@ test("rejects unsupported Vendo query parameters before fetching", async () => {
 
 test("exposes Bahn HTTP errors to callers", async () => {
 	await assert.rejects(
-		requestWithBahnCurl(
+		requestWithBahnFallback(
 			createVendoContext(),
 			"betterbahn-test",
 			{
@@ -286,7 +323,7 @@ test("exposes Bahn HTTP errors to callers", async () => {
 
 test("exposes Bahn API error messages to callers", async () => {
 	await assert.rejects(
-		requestWithBahnCurl(
+		requestWithBahnFallback(
 			createVendoContext(),
 			"betterbahn-test",
 			{

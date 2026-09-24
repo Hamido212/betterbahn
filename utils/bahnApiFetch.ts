@@ -187,15 +187,17 @@ export const fetchWithBahnFallback = async (
 ) => {
 	const fetchImplementation = dependencies?.fetch ?? globalThis.fetch;
 	const curlFetchImplementation = dependencies?.curlFetch ?? fetchWithCurl;
+	const response = await fetchImplementation(url, init);
 
-	if (isBahnApiUrl(url)) {
+	if (isBahnApiUrl(url) && [403, 452].includes(response.status)) {
+		await response.body?.cancel();
 		return await curlFetchImplementation(url, init);
 	}
 
-	return await fetchImplementation(url, init);
+	return response;
 };
 
-export const requestWithBahnCurl = async (
+export const requestWithBahnFallback = async (
 	context: VendoRequestContext,
 	userAgent: string,
 	requestData: VendoRequestData,
