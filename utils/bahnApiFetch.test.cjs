@@ -1,346 +1,130 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { brotliCompressSync, deflateSync, gzipSync } = require("node:zlib");
-const {
-	decompressResponseBody,
-	fetchWithBahnFallback,
-	parseResponseHeaders,
-	requestWithBahnFallback,
-} = require("./bahnApiFetch.ts");
+const http = require("node:http");
+const https = require("node:https");
+const net = require("node:net");
+const { gzipSync } = require("node:zlib");
+const { bahnAgent, selectBahnAgent, withBahnAgent, fetchFromBahn } = require("./bahnApiFetch.ts");
 
-test("retries blocked Bahn web API requests with curl", async () => {
-	let fetchCalls = 0;
-	let curlCalls = 0;
-	const response = await fetchWithBahnFallback(
+test("restricts the TLS agent to the HTTPS Bahn API paths", () => {
+	for (const url of [
 		"https://www.bahn.de/web/api/angebote/verbindung/example",
-		{},
-		{
-			fetch: () => {
-				fetchCalls += 1;
-				return Promise.resolve(new Response(null, { status: 403 }));
-			},
-			curlFetch: () => {
-				curlCalls += 1;
-				return Promise.resolve(
-					new Response('{"ok":true}', { status: 200 })
-				);
-			},
-		}
-	);
-
-	assert.equal(response.status, 200);
-	assert.equal(fetchCalls, 1);
-	assert.equal(curlCalls, 1);
-});
-
-test("retries blocked Bahn journey requests with curl", async () => {
-	let curlCalls = 0;
-	const response = await fetchWithBahnFallback(
+		"https://int.bahn.de/web/api/angebote/recon",
 		"https://app.services-bahn.de/mob/angebote/fahrplan",
-		{},
-		{
-			fetch: () => Promise.resolve(new Response(null, { status: 452 })),
-			curlFetch: () => {
-				curlCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-		}
-	);
-
-	assert.equal(response.status, 200);
-	assert.equal(curlCalls, 1);
-});
-
-test("retries blocked international Bahn web API requests with curl", async () => {
-	let curlCalls = 0;
-	await fetchWithBahnFallback(
-		"https://int.bahn.de/web/api/angebote/verbindung/example",
-		{},
-		{
-			fetch: () => Promise.resolve(new Response(null, { status: 452 })),
-			curlFetch: () => {
-				curlCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-		}
-	);
-
-	assert.equal(curlCalls, 1);
-});
-
-test("keeps successful native Bahn responses without invoking curl", async () => {
-	let curlCalls = 0;
-	const nativeResponse = new Response('{"journeys":[]}', { status: 200 });
-	const response = await fetchWithBahnFallback(
-		"https://app.services-bahn.de/mob/angebote/fahrplan",
-		{},
-		{
-			fetch: () => Promise.resolve(nativeResponse),
-			curlFetch: () => {
-				curlCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-		}
-	);
-
-	assert.equal(response, nativeResponse);
-	assert.equal(curlCalls, 0);
-});
-
-test("does not retry unrelated Bahn API errors with curl", async () => {
-	let curlCalls = 0;
-	const response = await fetchWithBahnFallback(
-		"https://www.bahn.de/web/api/angebote/verbindung/example",
-		{},
-		{
-			fetch: () => Promise.resolve(new Response(null, { status: 404 })),
-			curlFetch: () => {
-				curlCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-		}
-	);
-
-	assert.equal(response.status, 404);
-	assert.equal(curlCalls, 0);
-});
-
-test("uses native fetch for requests to other hosts", async () => {
-	let fetchCalls = 0;
-	let curlCalls = 0;
-	const response = await fetchWithBahnFallback(
-		"https://example.com/web/api/test",
-		{},
-		{
-			fetch: () => {
-				fetchCalls += 1;
-				return Promise.resolve(new Response(null, { status: 403 }));
-			},
-			curlFetch: () => {
-				curlCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-		}
-	);
-
-	assert.equal(response.status, 403);
-	assert.equal(fetchCalls, 1);
-	assert.equal(curlCalls, 0);
-});
-
-test("does not use curl for non-API Bahn pages", async () => {
-	let fetchCalls = 0;
-	let curlCalls = 0;
-	const response = await fetchWithBahnFallback(
+	]) assert.equal(selectBahnAgent(new URL(url)), bahnAgent);
+	for (const url of [
+		"http://www.bahn.de/web/api/test",
 		"https://www.bahn.de/buchung/start",
-		{},
-		{
-			fetch: () => {
-				fetchCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-			curlFetch: () => {
-				curlCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-		}
-	);
-
-	assert.equal(response.status, 200);
-	assert.equal(fetchCalls, 1);
-	assert.equal(curlCalls, 0);
+		"https://example.com/web/api/test",
+		"https://www.bahn.de.example.com/web/api/test",
+	]) assert.equal(selectBahnAgent(new URL(url)), undefined);
 });
 
-test("does not use curl for insecure Bahn API URLs", async () => {
-	let fetchCalls = 0;
-	const response = await fetchWithBahnFallback(
-		"http://www.bahn.de/web/api/angebote/verbindung/example",
-		{},
-		{
-			fetch: () => {
-				fetchCalls += 1;
-				return Promise.resolve(new Response(null, { status: 200 }));
-			},
-			curlFetch: () => Promise.reject(new Error("curl must not run")),
-		}
-	);
-
-	assert.equal(response.status, 200);
-	assert.equal(fetchCalls, 1);
+test("keeps Vendo request data intact when applying the agent hook", () => {
+	const options = { method: "POST", body: '{"test":1}', query: { page: 2 }, headers: { Accept: "application/json" } };
+	const result = withBahnAgent({}, options);
+	assert.deepEqual(result, { ...options, agent: selectBahnAgent });
+	assert.equal(options.agent, undefined);
 });
 
-test("parses the final header block returned by curl", () => {
-	const result = parseResponseHeaders(
-		"HTTP/1.1 100 Continue\r\n\r\n" +
-			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
-			"Set-Cookie: first=1\r\nSet-Cookie: second=2\r\n\r\n"
-	);
-
-	assert.equal(result.status, 200);
-	assert.equal(result.statusText, "OK");
-	assert.equal(result.headers.get("content-type"), "application/json");
-	assert.deepEqual(result.headers.getSetCookie(), ["first=1", "second=2"]);
+test("preserves the Vendo proxy agent when a proxy is configured", () => {
+	const previous = process.env.HTTPS_PROXY;
+	process.env.HTTPS_PROXY = "http://proxy.example:8080";
+	try {
+		const options = { agent: {}, method: "POST", body: "{}" };
+		assert.equal(withBahnAgent({}, options), options);
+	} finally {
+		if (previous === undefined) delete process.env.HTTPS_PROXY;
+		else process.env.HTTPS_PROXY = previous;
+	}
 });
 
-test("rejects curl output without valid response headers", () => {
-	assert.throws(
-		() => parseResponseHeaders("not an HTTP response"),
-		/no HTTP response headers/
-	);
-});
+const listen = (server) => new Promise((resolve) => { server.listen(0, "127.0.0.1", resolve); });
+const close = (server) => new Promise((resolve) => { server.close(resolve); });
 
-test("rejects malformed curl status lines", () => {
-	assert.throws(
-		() => parseResponseHeaders("HTTP/1.1 invalid\r\nContent-Type: text/plain"),
-		/invalid HTTP status/
-	);
-});
-
-test("leaves uncompressed response bodies unchanged", () => {
-	const body = Buffer.from("plain response");
-	const headers = new Headers({ "content-length": String(body.length) });
-
-	assert.equal(decompressResponseBody(body, headers), body);
-	assert.equal(headers.get("content-length"), String(body.length));
-});
-
-for (const [encoding, compress] of [
-	["gzip", gzipSync],
-	["deflate", deflateSync],
-	["br", brotliCompressSync],
-]) {
-	test(`decompresses ${encoding} responses`, () => {
-		const headers = new Headers({
-			"content-encoding": encoding,
-			"content-length": "123",
+test("decodes compressed JSON and preserves separate Set-Cookie headers", async () => {
+	let userAgent;
+	const server = http.createServer((req, res) => {
+		userAgent = req.headers["user-agent"];
+		res.writeHead(200, {
+			"Content-Type": "application/json",
+			"Content-Encoding": "gzip",
+			"Set-Cookie": ["first=1; Path=/", "second=2; Expires=Wed, 21 Oct 2037 07:28:00 GMT"],
 		});
-		const result = decompressResponseBody(
-			compress(Buffer.from("bahn response")),
-			headers
-		);
-
-		assert.equal(result.toString(), "bahn response");
-		assert.equal(headers.has("content-encoding"), false);
-		assert.equal(headers.has("content-length"), false);
+		res.end(gzipSync('{"ok":true}'));
 	});
+	await listen(server);
+	try {
+		const response = await fetchFromBahn(`http://127.0.0.1:${server.address().port}/`, {});
+		assert.deepEqual(await response.json(), { ok: true });
+		assert.equal(userAgent, "betterbahn/0.1.0");
+		assert.deepEqual(response.headers.raw()["set-cookie"], ["first=1; Path=/", "second=2; Expires=Wed, 21 Oct 2037 07:28:00 GMT"]);
+	} finally { await close(server); }
+});
+
+test("returns HTTP errors without retrying", async () => {
+	let calls = 0;
+	let userAgent;
+	const server = http.createServer((req, res) => { calls += 1; userAgent = req.headers["user-agent"]; res.writeHead(403); res.end("blocked"); });
+	await listen(server);
+	try {
+		const response = await fetchFromBahn(`http://127.0.0.1:${server.address().port}/`, { headers: { "User-Agent": "explicit-app-agent" } });
+		assert.equal(response.status, 403);
+		assert.equal(await response.text(), "blocked");
+		assert.equal(calls, 1);
+		assert.equal(userAgent, "explicit-app-agent");
+	} finally { await close(server); }
+});
+
+function helloExtensions(buffer) {
+	let offset = 5 + 4 + 2 + 32;
+	offset += 1 + buffer[offset];
+	offset += 2 + buffer.readUInt16BE(offset);
+	offset += 1 + buffer[offset];
+	const end = offset + 2 + buffer.readUInt16BE(offset);
+	offset += 2;
+	const extensions = new Map();
+	while (offset < end) {
+		const type = buffer.readUInt16BE(offset);
+		const length = buffer.readUInt16BE(offset + 2);
+		offset += 4;
+		extensions.set(type, buffer.subarray(offset, offset + length));
+		offset += length;
+	}
+	return extensions;
 }
 
-const createVendoContext = (transformRequest = (request) => request) => ({
-	profile: {
-		transformReqBody: (_context, body) => ({ wrapped: body }),
-		transformReq: (_context, request) => transformRequest(request),
-	},
-	opt: { language: "de-DE" },
-});
-
-test("adapts db-vendo-client requests and returns the JSON response", async () => {
-	let capturedUrl;
-	let capturedInit;
-	const result = await requestWithBahnFallback(
-		createVendoContext(),
-		"betterbahn-test",
-		{
-			endpoint: "https://app.services-bahn.de",
-			path: "/mob/angebote/fahrplan",
-			method: "post",
-			body: { origin: "Bremen" },
-			headers: { "X-Test": "yes" },
-		},
-		{
-			fetch: (url, init) => {
-				capturedUrl = url;
-				capturedInit = init;
-				return Promise.resolve(
-					new Response('{"journeys":[1]}', {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					})
-				);
-			},
-		}
-	);
-
-	assert.equal(
-		capturedUrl,
-		"https://app.services-bahn.de/mob/angebote/fahrplan"
-	);
-	assert.equal(capturedInit.method, "post");
-	assert.equal(capturedInit.body, '{"wrapped":{"origin":"Bremen"}}');
-	assert.equal(capturedInit.headers["Accept-Language"], "de-DE");
-	assert.equal(capturedInit.headers["User-Agent"], "betterbahn-test");
-	assert.equal(capturedInit.headers["X-Test"], "yes");
-	assert.deepEqual(result, { res: { journeys: [1] }, common: {} });
-});
-
-test("rejects unsupported Vendo query parameters before fetching", async () => {
-	let fetchCalls = 0;
-	await assert.rejects(
-		requestWithBahnFallback(
-			createVendoContext((request) => ({ ...request, query: { page: 1 } })),
-			"betterbahn-test",
-			{
-				endpoint: "https://app.services-bahn.de",
-				path: "/mob/location/search",
-				method: "post",
-				body: {},
-			},
-			{
-				fetch: () => {
-					fetchCalls += 1;
-					return Promise.resolve(new Response("{}"));
-				},
+test("sends compatible TLS groups and only HTTP/1.1 on the wire", { timeout: 5_000 }, async () => {
+	let resolveHello;
+	const hello = new Promise((resolve) => { resolveHello = resolve; });
+	const server = net.createServer((socket) => {
+		let data = Buffer.alloc(0);
+		socket.on("data", (chunk) => {
+			data = Buffer.concat([data, chunk]);
+			if (data.length >= 5 && data.length >= 5 + data.readUInt16BE(3)) {
+				resolveHello(data);
+				socket.destroy();
 			}
-		),
-		/query parameters are not supported/
-	);
-	assert.equal(fetchCalls, 0);
-});
-
-test("exposes Bahn HTTP errors to callers", async () => {
-	await assert.rejects(
-		requestWithBahnFallback(
-			createVendoContext(),
-			"betterbahn-test",
-			{
-				endpoint: "https://app.services-bahn.de",
-				path: "/mob/angebote/fahrplan",
-				method: "post",
-				body: {},
-			},
-			{
-				fetch: () =>
-					Promise.resolve(
-						new Response('{"error":"blocked"}', {
-							status: 403,
-							statusText: "Forbidden",
-						})
-					),
-			}
-		),
-		/403 Forbidden/
-	);
-});
-
-test("exposes Bahn API error messages to callers", async () => {
-	await assert.rejects(
-		requestWithBahnFallback(
-			createVendoContext(),
-			"betterbahn-test",
-			{
-				endpoint: "https://app.services-bahn.de",
-				path: "/mob/angebote/fahrplan",
-				method: "post",
-				body: {},
-			},
-			{
-				fetch: () =>
-					Promise.resolve(
-						new Response(
-							'{"fehlerNachricht":{"text":"Request was blocked"}}'
-						)
-					),
-			}
-		),
-		/Request was blocked/
-	);
+		});
+	});
+	await listen(server);
+	const req = https.get(`https://app.services-bahn.de:${server.address().port}/mob/test`, {
+		agent: bahnAgent,
+		lookup: (_hostname, options, callback) => options.all
+			? callback(null, [{ address: "127.0.0.1", family: 4 }])
+			: callback(null, "127.0.0.1", 4),
+	});
+	req.on("error", () => {});
+	try {
+		const extensions = helloExtensions(await hello);
+		const rawGroups = extensions.get(10);
+		const groups = [];
+		for (let i = 2; i < rawGroups.length; i += 2) groups.push(rawGroups.readUInt16BE(i));
+		assert.deepEqual(groups.filter((group) => group !== 4588), [29, 23, 24]);
+		assert.deepEqual([...extensions.get(16)], [0, 9, 8, ...Buffer.from("http/1.1")]);
+	} finally {
+		req.destroy();
+		bahnAgent.destroy();
+		await close(server);
+	}
 });

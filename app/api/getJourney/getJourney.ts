@@ -1,5 +1,5 @@
 import { fetchAndValidateJson } from "@/utils/fetchAndValidateJson";
-import { requestWithBahnFallback } from "@/utils/bahnApiFetch";
+import { withBahnAgent } from "@/utils/bahnApiFetch";
 import { parseHinfahrtReconWithAPI } from "@/utils/parseHinfahrtRecon";
 import { vbidSchema, vendoJourneySchema } from "@/utils/schemas";
 import { t } from "@/utils/trpc-init";
@@ -10,7 +10,7 @@ import { profile as dbProfile } from "db-vendo-client/p/db/index";
 import { prettifyError, z } from "zod/v4";
 
 export const dbClient = createClient(
-	{ ...(dbProfile as object), request: requestWithBahnFallback },
+	{ ...(dbProfile as object), transformReq: withBahnAgent },
 	"mail@lukasweihrauch.de"
 );
 
@@ -30,7 +30,7 @@ export const getJourney = t.procedure
 			schema: vbidSchema,
 		});
 
-		const cookies = vbidRequest.response.headers.getSetCookie();
+		const cookies = vbidRequest.response.headers.raw()["set-cookie"] ?? [];
 		const { data } = await parseHinfahrtReconWithAPI(vbidRequest.data, cookies);
 
 		// Find first segment with halte data for start station
